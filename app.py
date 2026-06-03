@@ -6,19 +6,20 @@ from pydantic import BaseModel
 from typing import Optional, Dict
 import uuid
 
-from models import init_db
 from kb import load_kb, search_kb
 from incident_service import create_incident, list_incidents
+from ai_service import ai_support_decision
 
-app = FastAPI(title="Customer Support Chatbot")
+app = FastAPI(title="Customer Support Chatbot with AWS AI")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-init_db()
 KB_DATA = load_kb()
 
-# In-memory session state for demo purposes
+# NOTE:
+# In-memory session works for local testing / single instance.
+# For production multi-instance deployment, move this to Redis or DynamoDB.
 SESSIONS: Dict[str, dict] = {}
 
 class ChatRequest(BaseModel):
@@ -34,15 +35,6 @@ def get_or_create_session(session_id: Optional[str]):
         }
     return session_id, SESSIONS[session_id]
 
-def detect_ticket_intent(message: str) -> bool:
-    triggers = [
-        "create incident", "create ticket", "raise ticket",
-        "open incident", "open ticket", "log issue",
-        "cannot resolve", "still not working", "need support"
-    ]
-    msg = message.lower()
-    return any(t in msg for t in triggers)
-
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -52,18 +44,17 @@ async def chat(req: ChatRequest):
     session_id, session = get_or_create_session(req.session_id)
     user_message = req.message.strip()
 
-    # If currently collecting incident details
     if session["mode"] == "collecting_incident":
         required_fields = [
             ("customer_name", "Please provide your name."),
             ("email", "Please provide your email address."),
             ("title", "Please provide a short title for the issue."),
             ("description", "Please describe the issue in detail."),
-            ("category", "Please provide the category (e.g. Login, Performance, Installation, Access)."),
+            ("category", "Please provide the category (Login, Performance, Installation, Billing, etc.)."),
             ("severity", "Please provide the severity (Low, Medium, High, Critical).")
         ]
 
-        # Find next missing field and fill it with current user message
+        # Save current user response into next missing field
         for field, _prompt in required_fields:
             if field not in session["incident_data"]:
                 session["incident_data"][field] = user_message
@@ -77,7 +68,7 @@ async def chat(req: ChatRequest):
                     "reply": prompt
                 }
 
-        # All fields collected, create incident
+        # Create incident once all data collected
         incident = create_incident(session["incident_data"])
         session["mode"] = "normal"
         session["incident_data"] = {}
@@ -86,54 +77,54 @@ async def chat(req: ChatRequest):
             "session_id": session_id,
             "reply": (
                 f"Your incident has been created successfully.\n"
-                f"Incident ID: INC-{incident.id:05d}\n"
-                f"Title: {incident.title}\n"
-                f"Status: {incident.status}"
+                f"Incident ID: {incident['incident_id']}\n"
+                f"Title: {incident['title']}\n"
+                f"Status: {incident['status']}"
             )
         }
 
-    # Explicit incident creation intent
-    if detect_ticket_intent(user_message):
-        session["mode"] = "collecting_incident"
-        session["incident_data"] = {}
-        return {
-            "session_id": session_id,
-            "reply": "Sure, I can create an incident for you. Please provide your name."
-        }
-
-    # Knowledge base search
+    # KB search first
     best_item, score = search_kb(user_message, KB_DATA)
+    kb_answer = best_item["answer"] if best_item and score >= 0.15 else ""
 
-    if best_item and score >= 0.15:
-        return {
-            "session_id": session_id,
-            "reply": f"{best_item['answer']}\n\nIf this does not solve your issue, reply with: 'create ticket'"
+    # AI decides whether to resolve or create incident
+    ai_result = ai_support_decision(user_message, kb_answer)
+
+    intent = ai_result.get("intent", "resolve")
+    reply = ai_result.get("reply", "I can help you with that.")
+    category = ai_result.get("category", "General")
+    severity = ai_result.get("severity", "Medium")
+
+    if intent == "create_incident":
+        session["mode"] = "collecting_incident"
+        session["incident_data"] = {
+            "category": category,
+            "severity": severity
         }
 
-    # Fallback
+        # Since category/severity already inferred, collect remaining fields
+        if "customer_name" not in session["incident_data"]:
+            return {
+                "session_id": session_id,
+                "reply": "I can create an incident for you. Please provide your name."
+            }
+
+    # If no strong KB answer and no incident intent
+    if not kb_answer and intent != "create_incident":
+        return {
+            "session_id": session_id,
+            "reply": (
+                "I could not find a confident solution right now. "
+                "If you want, I can create an incident for you. "
+                "Please type 'create ticket'."
+            )
+        }
+
     return {
         "session_id": session_id,
-        "reply": (
-            "I could not find a confident solution in the knowledge base. "
-            "If you want, I can create an incident for you. "
-            "Please reply with 'create ticket'."
-        )
+        "reply": reply + "\n\nIf this does not solve your issue, type 'create ticket'."
     }
 
 @app.get("/incidents")
 async def incidents():
-    data = list_incidents()
-    return [
-        {
-            "id": i.id,
-            "customer_name": i.customer_name,
-            "email": i.email,
-            "title": i.title,
-            "description": i.description,
-            "category": i.category,
-            "severity": i.severity,
-            "status": i.status,
-            "created_at": i.created_at.isoformat() if i.created_at else None
-        }
-        for i in data
-    ]
+    return list_incidents()
