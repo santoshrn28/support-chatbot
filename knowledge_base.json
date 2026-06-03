@@ -1,0 +1,22 @@
+[
+  {
+    "question": "How do I reset my password?",
+    "keywords": "password reset forgot login credentials sign in access",
+    "answer": "To reset your password: 1) Click 'Forgot Password' on the login page, 2) Enter your registered email, 3) Use the reset link sent to your email, 4) Set a new strong password."
+  },
+  {
+    "question": "Why is the application slow?",
+    "keywords": "slow performance latency hanging loading timeout",
+    "answer": "Application slowness can be caused by browser cache, network latency, or backend load. Please try: 1) Clear browser cache, 2) Restart browser, 3) Check network connection, 4) Retry after 5 minutes. If issue persists, I can create an incident for you."
+  },
+  {
+    "question": "How do I unlock my account?",
+    "keywords": "unlock account locked user access login blocked",
+    "answer": "If your account is locked, wait 15 minutes and try again, or use the 'Unlock Account' option if available. If you still cannot access the system, I can create a support incident."
+  },
+  {
+    "question": "How do I install the desktop agent?",
+    "keywords": "install setup desktop agent client installation",
+    "answer": "To install the desktop agent: 1) Download the installer from the support portal, 2) Run the installer as administrator, 3) Accept the license agreement, 4) Enter your organization code, 5) Restart your system."
+  }
+]
